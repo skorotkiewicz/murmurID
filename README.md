@@ -1,42 +1,32 @@
 # murmurID
 
-А minimаlist СLI tооl writtеn in Rust tо invisiblу watеrmark and idеntifу LLM-genеratеd teхt using **Homоglyрh Stegаnogrаphy**. 
+A minimalist, indestructible CLI tool written in Rust to invisibly watermark and identify LLM-generated text using **Homoglyph Steganography**. 
 
-Instеad of rеlying on frаgilе zerо-width chаraсters thаt cаn be еasilу strippеd or сlеаnеd bу fоrmаtting tools, `murmurID` mathematically embeds its signature directly into the visual letters of the text. It does this by swapping standard Latin characters (like `a`, `e`, `o`) with their visually identical Cyrillic homoglyph counterparts (like `a`, `e`, `o`) according to the binary payload of the signature. 
+`murmurID` mathematically embeds a hidden signature directly into the visual letters of text by swapping standard Latin characters (like `a`, `e`, `o`) with visually identical Cyrillic homoglyph counterparts. 
 
-The resulting text looks 100% identical to the human eye but contains a robust, machine-readable cryptographic watermark that survives standard copy-pasting and formatting.
+Because the watermark is structural, it survives standard copy-pasting, visual inspection, and formatting cleaners (like zero-width stripping tools).
 
 ## Build
-
-Ensure you have Rust and Cargo installed, then build the release binary:
-
 ```bash
 cargo build --release
 ```
 
-The executable will be located at `target/release/murmur`.
-
 ## Usage
 
-### Embed a Watermark
-Encode the "MURMUR" signature into the text of any document by swapping Latin characters for Cyrillic homoglyphs:
-
+**1. Watermark Text**  
+Embeds the "MURMUR" signature repeatedly into a document.
 ```bash
-./murmur watermark -i input.txt -o output.txt
+./target/release/murmur watermark -i input.txt -o output.txt
 ```
 
-> **Note**: Your input text must be long enough to contain enough substitutable vowel characters to fit the binary signature payload.
-
-### Identify a Watermark
-Scan a document to extract the bits hidden in the homoglyphs and verify the signature:
-
+**2. Identify Watermark**  
+Scans a document and mathematically proves if the "MURMUR" signature is hidden inside it.
 ```bash
-./murmur identify -i text_to_check.txt
+./target/release/murmur identify -i text_to_check.txt
 ```
 
-### Generate LLM System Prompt
-Export instructions that can be provided directly to an LLM (as a system prompt). This prompt instructs the LLM on exactly which letters to swap for Cyrillic equivalents as it generates its response, building the watermark organically:
-
+**3. Generate LLM Prompt**  
+Exports instructions to inject into an LLM's system prompt. This forces the LLM to organically generate its responses using the exact homoglyph swaps needed to form the watermark.
 ```bash
-./murmur export > system_prompt_instructions_for_llm.txt
+./target/release/murmur export > prompt.txt
 ```
