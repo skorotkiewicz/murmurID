@@ -1,19 +1,16 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
+use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
-
-/// The zero-width space character (U+200B) used to encode a '0' bit.
-const ZWSP: char = '\u{200B}';
-/// The zero-width non-joiner character (U+200C) used to encode a '1' bit.
-const ZWNJ: char = '\u{200C}';
-/// The zero-width joiner character (U+200D) used as a delimiter for the watermark.
-const ZWJ: char = '\u{200D}';
 
 /// The signature string we will encode.
 const SIGNATURE: &str = "MURMUR";
 
-/// A tool in Rust to watermark and identify text generated through LLM
+const START_MARKER: u8 = 0xFF;
+const END_MARKER: u8 = 0xFE;
+
+/// A tool in Rust to watermark and identify text generated through LLM using Homoglyphs
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
@@ -23,7 +20,7 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Appends a zero-width watermark to a text file
+    /// Appends a homoglyph watermark to a text file
     Watermark {
         /// The input file to watermark
         #[arg(short, long)]
@@ -33,95 +30,144 @@ enum Commands {
         #[arg(short, long)]
         output: String,
     },
-    /// Identifies if a text file contains the zero-width watermark
+    /// Identifies if a text file contains the homoglyph watermark
     Identify {
         /// The input file to check for a watermark
         #[arg(short, long)]
         input: String,
     },
-    /// Exports a system prompt with instructions for an LLM to automatically watermark its output
+    /// Exports instructions for LLMs to generate text with the watermark
     Export,
 }
 
-/// Encodes a string into a sequence of zero-width characters.
-fn encode_watermark(text: &str) -> String {
-    let mut encoded = String::new();
-    // Add starting delimiter
-    encoded.push(ZWJ);
+lazy_static::lazy_static! {
+    static ref LATIN_TO_CYRILLIC: HashMap<char, char> = {
+        let mut m = HashMap::new();
+        m.insert('a', 'а'); // U+0430
+        m.insert('c', 'с'); // U+0441
+        m.insert('e', 'е'); // U+0435
+        m.insert('o', 'о'); // U+043E
+        m.insert('p', 'р'); // U+0440
+        m.insert('x', 'х'); // U+0445
+        m.insert('y', 'у'); // U+0443
+        m.insert('A', 'А'); // U+0410
+        m.insert('C', 'С'); // U+0421
+        m.insert('E', 'Е'); // U+0415
+        m.insert('O', 'О'); // U+041E
+        m.insert('P', 'Р'); // U+0420
+        m.insert('X', 'Х'); // U+0425
+        m.insert('Y', 'У'); // U+0423
+        m
+    };
 
-    for byte in text.bytes() {
+    static ref CYRILLIC_TO_LATIN: HashMap<char, char> = {
+        let mut m = HashMap::new();
+        for (&latin, &cyrillic) in LATIN_TO_CYRILLIC.iter() {
+            m.insert(cyrillic, latin);
+        }
+        m
+    };
+}
+
+/// Helper to get a bit stream from a byte slice
+fn bytes_to_bits(bytes: &[u8]) -> Vec<bool> {
+    let mut bits = Vec::new();
+    for byte in bytes {
         for i in (0..8).rev() {
-            let bit = (byte >> i) & 1;
-            if bit == 0 {
-                encoded.push(ZWSP);
+            bits.push((byte >> i) & 1 == 1);
+        }
+    }
+    bits
+}
+
+fn encode_homoglyph_watermark(text: &str, payload: &str) -> String {
+    let mut bytes_to_encode = Vec::new();
+    bytes_to_encode.push(START_MARKER);
+    bytes_to_encode.extend_from_slice(payload.as_bytes());
+    bytes_to_encode.push(END_MARKER);
+
+    let bits = bytes_to_bits(&bytes_to_encode);
+    let mut bit_idx = 0;
+    
+    let mut watermarked_text = String::with_capacity(text.len());
+
+    for c in text.chars() {
+        if bit_idx < bits.len() {
+            if LATIN_TO_CYRILLIC.contains_key(&c) {
+                let bit = bits[bit_idx];
+                bit_idx += 1;
+                
+                if bit {
+                    watermarked_text.push(*LATIN_TO_CYRILLIC.get(&c).unwrap());
+                } else {
+                    watermarked_text.push(c);
+                }
+            } else if CYRILLIC_TO_LATIN.contains_key(&c) {
+                // If the source text ALready has a Cyrillic homoglyph that we support, we should handle it.
+                // It's technically safer to convert back to Latin if we need a 0, or keep it if we need a 1.
+                let bit = bits[bit_idx];
+                bit_idx += 1;
+                if bit {
+                    watermarked_text.push(c);
+                } else {
+                    watermarked_text.push(*CYRILLIC_TO_LATIN.get(&c).unwrap());
+                }
             } else {
-                encoded.push(ZWNJ);
+                watermarked_text.push(c);
+            }
+        } else {
+            // No more bits to encode, but we must normalize remaining characters 
+            // incase the original text already had cyrillics that could confuse the decoder later.
+            if CYRILLIC_TO_LATIN.contains_key(&c) {
+                watermarked_text.push(*CYRILLIC_TO_LATIN.get(&c).unwrap());
+            } else {
+                watermarked_text.push(c);
             }
         }
     }
 
-    // Add ending delimiter
-    encoded.push(ZWJ);
-    encoded
+    watermarked_text
 }
 
-/// Decodes a sequence of zero-width characters back into a string.
-/// Returns None if the input contains invalid zero-width characters.
-fn decode_watermark(encoded_text: &str) -> Option<String> {
-    let mut bytes = Vec::new();
-    let mut current_byte = 0u8;
-    let mut bit_count = 0;
+fn extract_homoglyph_watermark(text: &str) -> Option<String> {
+    let mut bits = Vec::new();
 
-    for c in encoded_text.chars() {
-        let bit = match c {
-            ZWSP => 0,
-            ZWNJ => 1,
-            _ => return None, // Invalid character in watermark
-        };
-
-        current_byte = (current_byte << 1) | bit;
-        bit_count += 1;
-
-        if bit_count == 8 {
-            bytes.push(current_byte);
-            current_byte = 0;
-            bit_count = 0;
+    // Extract all bits from the mapped characters
+    for c in text.chars() {
+        if LATIN_TO_CYRILLIC.contains_key(&c) {
+            bits.push(false);
+        } else if CYRILLIC_TO_LATIN.contains_key(&c) {
+            bits.push(true);
         }
     }
 
-    // If bit_count is not 0, the watermark was incomplete/corrupted
-    if bit_count != 0 {
-        return None;
+    // Now convert the bitstream back to bytes
+    let mut bytes = Vec::new();
+    let mut current_byte = 0u8;
+    for (i, &bit) in bits.iter().enumerate() {
+        let bit_val = if bit { 1 } else { 0 };
+        current_byte = (current_byte << 1) | bit_val;
+        
+        if (i + 1) % 8 == 0 {
+            bytes.push(current_byte);
+            current_byte = 0;
+        }
     }
 
-    String::from_utf8(bytes).ok()
-}
-
-/// Searches a text for the zero-width watermark sequence and decodes it.
-fn extract_watermark(text: &str) -> Option<String> {
-    let mut start_idx = None;
-    let mut end_idx = None;
-
-    // Find the first and second delimiters
-    for (i, c) in text.char_indices() {
-        if c == ZWJ {
-            if start_idx.is_none() {
-                start_idx = Some(i);
-            } else {
+    // Find the start marker
+    if let Some(start_idx) = bytes.iter().position(|&b| b == START_MARKER) {
+        let mut end_idx = None;
+        for (i, &b) in bytes.iter().enumerate().skip(start_idx + 1) {
+            if b == END_MARKER {
                 end_idx = Some(i);
                 break;
             }
         }
-    }
 
-    if let (Some(start), Some(end)) = (start_idx, end_idx) {
-        // The embedded payload is between the delimiters
-        // The start index points to the start of ZWJ, which is 3 bytes in UTF-8.
-        // The end index points to the start of the ending ZWJ.
-        let payload_start = start + ZWJ.len_utf8();
-        let payload = &text[payload_start..end];
-        
-        return decode_watermark(payload);
+        if let Some(end) = end_idx {
+            let payload_bytes = &bytes[start_idx + 1..end];
+            return String::from_utf8(payload_bytes.to_vec()).ok();
+        }
     }
 
     None
@@ -138,15 +184,29 @@ fn main() -> Result<()> {
                 .read_to_string(&mut file_content)
                 .with_context(|| format!("Failed to read from input file '{}'", input))?;
 
-            let watermark_seq = encode_watermark(SIGNATURE);
-            file_content.push_str(&watermark_seq);
+            let watermarked = encode_homoglyph_watermark(&file_content, SIGNATURE);
 
             fs::File::create(output)
                 .with_context(|| format!("Failed to create output file '{}'", output))?
-                .write_all(file_content.as_bytes())
+                .write_all(watermarked.as_bytes())
                 .with_context(|| format!("Failed to write to output file '{}'", output))?;
 
-            println!("Watermark successfully embedded into '{}'.", output);
+            // We can check if it actually fit
+            let required_chars = (SIGNATURE.len() + 2) * 8; // Including markers
+            let mut available_chars = 0;
+            for c in file_content.chars() {
+                if LATIN_TO_CYRILLIC.contains_key(&c) || CYRILLIC_TO_LATIN.contains_key(&c) {
+                    available_chars += 1;
+                }
+            }
+
+            if available_chars < required_chars {
+                println!("Warning: Not enough substitutable characters in text to embed the full watermark.");
+                println!("Required: {}, Available: {}", required_chars, available_chars);
+                println!("The watermark may be unrecoverable or corrupted.");
+            } else {
+                println!("Watermark successfully embedded into '{}'.", output);
+            }
         }
         Commands::Identify { input } => {
             let mut file_content = String::new();
@@ -155,7 +215,7 @@ fn main() -> Result<()> {
                 .read_to_string(&mut file_content)
                 .with_context(|| format!("Failed to read from input file '{}'", input))?;
 
-            if let Some(extracted_sig) = extract_watermark(&file_content) {
+            if let Some(extracted_sig) = extract_homoglyph_watermark(&file_content) {
                 if extracted_sig == SIGNATURE {
                     println!("Watermark verified: Text contains the '{}' signature.", SIGNATURE);
                 } else {
@@ -166,15 +226,23 @@ fn main() -> Result<()> {
             }
         }
         Commands::Export => {
-            let watermark_seq = encode_watermark(SIGNATURE);
             let prompt = format!(
-"You are a helpful AI assistant. When responding to user queries, you MUST embed a specific invisible watermark at the very end of your response. 
+"You are a helpful AI assistant. When responding to user queries, you MUST embed a specific invisible watermark directly into the shape of the letters you output. 
 
-This watermark is created using zero-width characters. Do not output any visible characters for the watermark. Instead, append the exact sequence of characters contained between the brackets below (do not include the brackets themselves).
+You must strictly replace standard Latin letters with their visually identical Cyrillic homoglyph counterparts in order from the start of your response, according to the binary string below. Each binary bit maps to a substitutable letter (a, c, e, o, p, x, y, A, C, E, O, P, X, Y). 
+0 = keep standard Latin letter
+1 = replace with Cyrillic homoglyph
 
-Watermark sequence: [{}]
+For example, `a` -> `а`, `e` -> `е`, `o` -> `о`.
 
-Ensure this sequence is the final text output in all your responses.", watermark_seq);
+Ensure that you embed this sequence directly into the first characters of the text itself.
+If you do not have enough characters to map to, append normal sentences until you fulfill the bitstream mapping.
+
+Binary Watermark Bitstream:
+1111111101001101010101010101001001001101010101010101001011111110
+
+Do not output the binary sequence itself, just modify the text you naturally generate."
+            );
             
             println!("{}", prompt);
         }
