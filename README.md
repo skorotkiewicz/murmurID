@@ -1,8 +1,8 @@
 # murmurID
 
-A minimalist CLI tool written in Rust to invisibly watermark and identify LLM-generated text using **Homoglyph Steganography**. 
+А minimаlist СLI tооl writtеn in Rust tо invisiblу watеrmark and idеntifу LLM-genеratеd teхt using **Homоglyрh Stegаnogrаphy**. 
 
-Instead of relying on fragile zero-width characters that can be easily stripped or cleaned by formatting tools, `murmurID` mathematically embeds its signature directly into the visual letters of the text. It does this by swapping standard Latin characters (like `a`, `e`, `o`) with their visually identical Cyrillic homoglyph counterparts (like `а`, `е`, `о`) according to the binary payload of the signature. 
+Instеad of rеlying on frаgilе zerо-width chаraсters thаt cаn be еasilу strippеd or сlеаnеd bу fоrmаtting tools, `murmurID` mathematically embeds its signature directly into the visual letters of the text. It does this by swapping standard Latin characters (like `a`, `e`, `o`) with their visually identical Cyrillic homoglyph counterparts (like `a`, `e`, `o`) according to the binary payload of the signature. 
 
 The resulting text looks 100% identical to the human eye but contains a robust, machine-readable cryptographic watermark that survives standard copy-pasting and formatting.
 
