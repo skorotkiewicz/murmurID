@@ -92,37 +92,25 @@ fn encode_homoglyph_watermark(text: &str, payload: &str) -> String {
     let mut watermarked_text = String::with_capacity(text.len());
 
     for c in text.chars() {
-        if bit_idx < bits.len() {
-            if LATIN_TO_CYRILLIC.contains_key(&c) {
-                let bit = bits[bit_idx];
-                bit_idx += 1;
-                
-                if bit {
-                    watermarked_text.push(*LATIN_TO_CYRILLIC.get(&c).unwrap());
-                } else {
-                    watermarked_text.push(c);
-                }
-            } else if CYRILLIC_TO_LATIN.contains_key(&c) {
-                // If the source text ALready has a Cyrillic homoglyph that we support, we should handle it.
-                // It's technically safer to convert back to Latin if we need a 0, or keep it if we need a 1.
-                let bit = bits[bit_idx];
-                bit_idx += 1;
-                if bit {
-                    watermarked_text.push(c);
-                } else {
-                    watermarked_text.push(*CYRILLIC_TO_LATIN.get(&c).unwrap());
-                }
+        if LATIN_TO_CYRILLIC.contains_key(&c) {
+            let bit = bits[bit_idx % bits.len()];
+            bit_idx += 1;
+            
+            if bit {
+                watermarked_text.push(*LATIN_TO_CYRILLIC.get(&c).unwrap());
             } else {
                 watermarked_text.push(c);
+            }
+        } else if CYRILLIC_TO_LATIN.contains_key(&c) {
+            let bit = bits[bit_idx % bits.len()];
+            bit_idx += 1;
+            if bit {
+                watermarked_text.push(c);
+            } else {
+                watermarked_text.push(*CYRILLIC_TO_LATIN.get(&c).unwrap());
             }
         } else {
-            // No more bits to encode, but we must normalize remaining characters 
-            // incase the original text already had cyrillics that could confuse the decoder later.
-            if CYRILLIC_TO_LATIN.contains_key(&c) {
-                watermarked_text.push(*CYRILLIC_TO_LATIN.get(&c).unwrap());
-            } else {
-                watermarked_text.push(c);
-            }
+            watermarked_text.push(c);
         }
     }
 
@@ -155,19 +143,32 @@ fn extract_homoglyph_watermark(text: &str) -> Option<String> {
     }
 
     // Find the start marker
-    if let Some(start_idx) = bytes.iter().position(|&b| b == START_MARKER) {
-        let mut end_idx = None;
-        for (i, &b) in bytes.iter().enumerate().skip(start_idx + 1) {
-            if b == END_MARKER {
-                end_idx = Some(i);
-                break;
+    // Find the FIRST complete valid payload block in all the bytes and ignore the rest
+    let mut current_idx = 0;
+    while current_idx < bytes.len() {
+        if bytes[current_idx] == START_MARKER {
+            let mut end_idx = None;
+            for i in (current_idx + 1)..bytes.len() {
+                if bytes[i] == END_MARKER {
+                    end_idx = Some(i);
+                    break;
+                } else if bytes[i] == START_MARKER {
+                    // Start marker inside bounds, so the previous start marker was likely false
+                    current_idx = i - 1; 
+                    break;
+                }
+            }
+
+            if let Some(end) = end_idx {
+                let payload_bytes = &bytes[current_idx + 1..end];
+                if let Ok(sig) = String::from_utf8(payload_bytes.to_vec()) {
+                    return Some(sig);
+                }
+                // If invalid utf8, maybe move on and look for next START_MARKER
+                current_idx = end;
             }
         }
-
-        if let Some(end) = end_idx {
-            let payload_bytes = &bytes[start_idx + 1..end];
-            return String::from_utf8(payload_bytes.to_vec()).ok();
-        }
+        current_idx += 1;
     }
 
     None
@@ -257,10 +258,9 @@ Here is the exact mapping of Latin character -> Cyrillic homoglyph you must use:
 - `X` -> `Х`
 - `Y` -> `У`
 
-Ensure that you embed this sequence directly into the first characters of the text itself.
-If you do not have enough characters to map to, append normal sentences until you fulfill the bitstream mapping.
+Ensure that you embed this sequence continually throughout the text. When you reach the end of the bitstream sequence, START OVER FROM THE BEGINNING of the sequence and continue mapping substitutions over and over again until the text ends.
 
-Binary Watermark Bitstream:
+Binary Watermark Bitstream (REPEAT THIS OVER AND OVER):
 {}
 
 Do not output the binary sequence itself, just modify the text you naturally generate.",
