@@ -241,7 +241,21 @@ You must strictly replace standard Latin letters with their visually identical C
 0 = keep standard Latin letter
 1 = replace with Cyrillic homoglyph
 
-For example, `a` -> `а`, `e` -> `е`, `o` -> `о`.
+Here is the exact mapping of Latin character -> Cyrillic homoglyph you must use:
+- `a` -> `а`
+- `c` -> `с`
+- `e` -> `е`
+- `o` -> `о`
+- `p` -> `р`
+- `x` -> `х`
+- `y` -> `у`
+- `A` -> `А`
+- `C` -> `С`
+- `E` -> `Е`
+- `O` -> `О`
+- `P` -> `Р`
+- `X` -> `Х`
+- `Y` -> `У`
 
 Ensure that you embed this sequence directly into the first characters of the text itself.
 If you do not have enough characters to map to, append normal sentences until you fulfill the bitstream mapping.
