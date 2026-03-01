@@ -129,46 +129,53 @@ fn extract_homoglyph_watermark(text: &str) -> Option<String> {
         }
     }
 
-    // Now convert the bitstream back to bytes
-    let mut bytes = Vec::new();
-    let mut current_byte = 0u8;
-    for (i, &bit) in bits.iter().enumerate() {
-        let bit_val = if bit { 1 } else { 0 };
-        current_byte = (current_byte << 1) | bit_val;
-        
-        if (i + 1) % 8 == 0 {
-            bytes.push(current_byte);
-            current_byte = 0;
-        }
-    }
+    // Convert START_MARKER to boolean array for easy comparison
+    let start_bits = bytes_to_bits(&[START_MARKER]);
 
-    // Find the start marker
-    // Find the FIRST complete valid payload block in all the bytes and ignore the rest
-    let mut current_idx = 0;
-    while current_idx < bytes.len() {
-        if bytes[current_idx] == START_MARKER {
-            let mut end_idx = None;
-            for i in (current_idx + 1)..bytes.len() {
-                if bytes[i] == END_MARKER {
-                    end_idx = Some(i);
+    // Use a sliding window to find the start marker bit sequence
+    let mut i = 0;
+    while i + start_bits.len() <= bits.len() {
+        let mut is_start = true;
+        for j in 0..start_bits.len() {
+            if bits[i + j] != start_bits[j] {
+                is_start = false;
+                break;
+            }
+        }
+
+        if is_start {
+            // We found a start marker. Now read 8 bits at a time aligned to this offset.
+            let mut payload_bytes = Vec::new();
+            let mut bit_idx = i + start_bits.len();
+            let mut found_end = false;
+
+            while bit_idx + 8 <= bits.len() {
+                let mut current_byte = 0u8;
+                for j in 0..8 {
+                    let bit_val = if bits[bit_idx + j] { 1 } else { 0 };
+                    current_byte = (current_byte << 1) | bit_val;
+                }
+
+                if current_byte == END_MARKER {
+                    found_end = true;
                     break;
-                } else if bytes[i] == START_MARKER {
-                    // Start marker inside bounds, so the previous start marker was likely false
-                    current_idx = i - 1; 
+                } else if current_byte == START_MARKER {
+                    // Start marker inside payload, probably false synchronization. 
+                    // Let's abort and keep looking.
                     break;
                 }
+
+                payload_bytes.push(current_byte);
+                bit_idx += 8;
             }
 
-            if let Some(end) = end_idx {
-                let payload_bytes = &bytes[current_idx + 1..end];
-                if let Ok(sig) = String::from_utf8(payload_bytes.to_vec()) {
+            if found_end {
+                if let Ok(sig) = String::from_utf8(payload_bytes) {
                     return Some(sig);
                 }
-                // If invalid utf8, maybe move on and look for next START_MARKER
-                current_idx = end;
             }
         }
-        current_idx += 1;
+        i += 1;
     }
 
     None
