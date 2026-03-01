@@ -226,6 +226,14 @@ fn main() -> Result<()> {
             }
         }
         Commands::Export => {
+            let mut bytes_to_encode = Vec::new();
+            bytes_to_encode.push(START_MARKER);
+            bytes_to_encode.extend_from_slice(SIGNATURE.as_bytes());
+            bytes_to_encode.push(END_MARKER);
+
+            let bits = bytes_to_bits(&bytes_to_encode);
+            let bit_string: String = bits.iter().map(|&b| if b { '1' } else { '0' }).collect();
+
             let prompt = format!(
 "You are a helpful AI assistant. When responding to user queries, you MUST embed a specific invisible watermark directly into the shape of the letters you output. 
 
@@ -239,9 +247,10 @@ Ensure that you embed this sequence directly into the first characters of the te
 If you do not have enough characters to map to, append normal sentences until you fulfill the bitstream mapping.
 
 Binary Watermark Bitstream:
-1111111101001101010101010101001001001101010101010101001011111110
+{}
 
-Do not output the binary sequence itself, just modify the text you naturally generate."
+Do not output the binary sequence itself, just modify the text you naturally generate.",
+                bit_string
             );
             
             println!("{}", prompt);
